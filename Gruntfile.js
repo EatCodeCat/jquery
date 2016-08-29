@@ -1,25 +1,36 @@
 module.exports = function( grunt ) {
-
 	"use strict";
 
-	var gzip = require( "gzip-js" ),
-		readOptionalJSON = function( filepath ) {
-			var data = {};
-			try {
-				data = grunt.file.readJSON( filepath );
-			} catch(e) {}
-			return data;
-		},
-		srcHintOptions = readOptionalJSON( "src/.jshintrc" );
+	function readOptionalJSON( filepath ) {
+		var stripJSONComments = require( "strip-json-comments" ),
+			data = {};
+		try {
+			data = JSON.parse( stripJSONComments(
+				fs.readFileSync( filepath, { encoding: "utf8" } )
+			) );
+		} catch ( e ) {}
+		return data;
+	}
 
-	// The concatenated file won't pass onevar
-	// But our modules can
-	delete srcHintOptions.onevar;
+	var fs = require( "fs" ),
+		gzip = require( "gzip-js" ),
+		oldNode = /^v0\./.test( process.version );
 
-	grunt.initConfig({
-		pkg: grunt.file.readJSON("package.json"),
-		dst: readOptionalJSON("dist/.destination.json"),
-		compare_size: {
+	// Support: Node.js <4
+	// Skip running tasks that dropped support for Node.js 0.10 & 0.12
+	// in those Node versions.
+	function runIfNewNode( task ) {
+		return oldNode ? "print_old_node_message:" + task : task;
+	}
+
+	if ( !grunt.option( "filename" ) ) {
+		grunt.option( "filename", "jquery.js" );
+	}
+
+	grunt.initConfig( {
+		pkg: grunt.file.readJSON( "package.json" ),
+		dst: readOptionalJSON( "dist/.destination.json" ),
+		"compare_size": {
 			files: [ "dist/jquery.js", "dist/jquery.min.js" ],
 			options: {
 				compress: {
@@ -30,6 +41,18 @@ module.exports = function( grunt ) {
 				cache: "build/.sizecache.json"
 			}
 		},
+		babel: {
+			options: {
+				sourceMap: "inline",
+				retainLines: true
+			},
+			nodeSmokeTests: {
+				files: {
+					"test/node_smoke_tests/lib/ensure_iterability.js":
+						"test/node_smoke_tests/lib/ensure_iterability_es6.js"
+				}
+			}
+		},
 		build: {
 			all: {
 				dest: "dist/jquery.js",
@@ -37,113 +60,182 @@ module.exports = function( grunt ) {
 					"core",
 					"selector"
 				],
+
 				// Exclude specified modules if the module matching the key is removed
 				removeWith: {
-					ajax: [ "manipulation/_evalUrl" ],
+					ajax: [ "manipulation/_evalUrl", "event/ajax" ],
 					callbacks: [ "deferred" ],
 					css: [ "effects", "dimensions", "offset" ],
+					"css/showHide": [ "effects" ],
+					deferred: {
+						remove: [ "ajax", "effects", "queue", "core/ready" ],
+						include: [ "core/ready-no-deferred" ]
+					},
 					sizzle: [ "css/hiddenVisibleSelectors", "effects/animatedSelector" ]
+				}
+			}
+		},
+		npmcopy: {
+			all: {
+				options: {
+					destPrefix: "external"
+				},
+				files: {
+					"sizzle/dist": "sizzle/dist",
+					"sizzle/LICENSE.txt": "sizzle/LICENSE.txt",
+
+					"npo/npo.js": "native-promise-only/npo.js",
+
+					"qunit/qunit.js": "qunitjs/qunit/qunit.js",
+					"qunit/qunit.css": "qunitjs/qunit/qunit.css",
+					"qunit/LICENSE.txt": "qunitjs/LICENSE.txt",
+
+					"qunit-assert-step/qunit-assert-step.js":
+					"qunit-assert-step/qunit-assert-step.js",
+					"qunit-assert-step/MIT-LICENSE.txt":
+					"qunit-assert-step/MIT-LICENSE.txt",
+
+					"requirejs/require.js": "requirejs/require.js",
+
+					"sinon/sinon.js": "sinon/pkg/sinon.js",
+					"sinon/LICENSE.txt": "sinon/LICENSE"
 				}
 			}
 		},
 		jsonlint: {
 			pkg: {
 				src: [ "package.json" ]
-			},
-			bower: {
-				src: [ "bower.json" ]
 			}
 		},
-		jshint: {
-			src: {
-				src: [ "src/**/*.js" ],
-				options: {
-					jshintrc: "src/.jshintrc"
-				}
+		eslint: {
+			options: {
+
+				// See https://github.com/sindresorhus/grunt-eslint/issues/119
+				quiet: true
 			},
+
+			// We have to explicitly declare "src" property otherwise "newer"
+			// task wouldn't work properly :/
 			dist: {
-				src: [ "dist/jquery.js" ],
-				options: srcHintOptions
+				src: "dist/jquery.js"
 			},
-			grunt: {
-				src: [ "Gruntfile.js", "build/tasks/*", "build/{bower-install,release-notes,release}.js" ],
-				options: {
-					jshintrc: ".jshintrc"
-				}
-			},
-			tests: {
-				src: [ "test/**/*.js" ],
-				options: {
-					jshintrc: "test/.jshintrc"
-				}
+			dev: {
+				src: [ "src/**/*.js", "Gruntfile.js", "test/**/*.js", "build/**/*.js" ]
 			}
 		},
 		testswarm: {
-			tests: "ajax attributes callbacks core css data deferred dimensions effects event manipulation offset queue selector serialize support traversing Sizzle".split(" ")
+			tests: [
+
+				// A special module with basic tests, meant for
+				// not fully supported environments like Android 2.3,
+				// jsdom or PhantomJS. We run it everywhere, though,
+				// to make sure tests are not broken.
+				"basic",
+
+				"ajax",
+				"animation",
+				"attributes",
+				"callbacks",
+				"core",
+				"css",
+				"data",
+				"deferred",
+				"deprecated",
+				"dimensions",
+				"effects",
+				"event",
+				"manipulation",
+				"offset",
+				"queue",
+				"selector",
+				"serialize",
+				"support",
+				"traversing",
+				"tween"
+			]
 		},
 		watch: {
-			files: [ "<%= jshint.grunt.src %>", "<%= jshint.tests.src %>", "src/**/*.js" ],
-			tasks: "dev"
-		},
-		"pre-uglify": {
-			all: {
-				files: {
-					"dist/jquery.pre-min.js": [ "dist/jquery.js" ]
-				},
-				options: {
-					banner: "\n\n\n\n\n\n\n\n\n\n\n\n" + // banner line size must be preserved
-						"/*! jQuery v<%= pkg.version %> | " +
-						"(c) 2005, 2013 jQuery Foundation, Inc. | " +
-						"jquery.org/license */\n"
-				}
-			}
+			files: [ "<%= eslint.dev.src %>" ],
+			tasks: [ "dev" ]
 		},
 		uglify: {
 			all: {
 				files: {
-					"dist/jquery.min.js": [ "dist/jquery.pre-min.js" ]
+					"dist/<%= grunt.option('filename').replace('.js', '.min.js') %>":
+						"dist/<%= grunt.option('filename') %>"
 				},
 				options: {
-					// Keep our hard-coded banner
-					preserveComments: "some",
-					sourceMap: "dist/jquery.min.map",
-					sourceMappingURL: "jquery.min.map",
+					preserveComments: false,
+					sourceMap: true,
+					ASCIIOnly: true,
+					sourceMapName:
+						"dist/<%= grunt.option('filename').replace('.js', '.min.map') %>",
 					report: "min",
 					beautify: {
-						ascii_only: true
+						"ascii_only": true
 					},
+					banner: "/*! jQuery v<%= pkg.version %> | " +
+						"(c) jQuery Foundation | jquery.org/license */",
 					compress: {
-						hoist_funs: false,
+						"hoist_funs": false,
 						loops: false,
 						unused: false
 					}
 				}
 			}
-		},
-		"post-uglify": {
-			all: {
-				src: [ "dist/jquery.min.map" ],
-				options: {
-					tempFiles: [ "dist/jquery.pre-min.js" ]
-				}
-			}
 		}
-	});
+	} );
 
 	// Load grunt tasks from NPM packages
-	grunt.loadNpmTasks( "grunt-compare-size" );
-	grunt.loadNpmTasks( "grunt-git-authors" );
-	grunt.loadNpmTasks( "grunt-contrib-watch" );
-	grunt.loadNpmTasks( "grunt-contrib-jshint" );
-	grunt.loadNpmTasks( "grunt-contrib-uglify" );
-	grunt.loadNpmTasks( "grunt-jsonlint" );
+	// Support: Node.js <4
+	// Don't load the eslint task in old Node.js, it won't parse.
+	require( "load-grunt-tasks" )( grunt, {
+		pattern: oldNode ? [ "grunt-*", "!grunt-eslint" ] : [ "grunt-*" ]
+	} );
 
 	// Integrate jQuery specific tasks
 	grunt.loadTasks( "build/tasks" );
 
-	// Short list as a high frequency watch task
-	grunt.registerTask( "dev", [ "build:*:*", "jshint" ] );
+	grunt.registerTask( "print_old_node_message", function() {
+		var task = [].slice.call( arguments ).join( ":" );
+		grunt.log.writeln( "Old Node.js detected, running the task \"" + task + "\" skipped..." );
+	} );
 
-	// Default grunt
-	grunt.registerTask( "default", [ "jsonlint", "dev", "pre-uglify", "uglify", "post-uglify", "dist:*", "compare_size" ] );
+	grunt.registerTask( "lint", [
+		"jsonlint",
+		runIfNewNode( "eslint" )
+	] );
+
+	grunt.registerTask( "lint:newer", [
+		"newer:jsonlint",
+		runIfNewNode( "newer:eslint" )
+	] );
+
+	grunt.registerTask( "test:fast", runIfNewNode( "node_smoke_tests" ) );
+	grunt.registerTask( "test:slow", runIfNewNode( "promises_aplus_tests" ) );
+
+	grunt.registerTask( "test", [
+		"test:fast",
+		"test:slow"
+	] );
+
+	grunt.registerTask( "dev", [
+		"build:*:*",
+		runIfNewNode( "newer:eslint:dev" ),
+		"newer:uglify",
+		"remove_map_comment",
+		"dist:*",
+		"compare_size"
+	] );
+
+	grunt.registerTask( "default", [
+		runIfNewNode( "eslint:dev" ),
+		"build:*:*",
+		"uglify",
+		"remove_map_comment",
+		"dist:*",
+		runIfNewNode( "eslint:dist" ),
+		"test:fast",
+		"compare_size"
+	] );
 };

@@ -2,14 +2,24 @@ module.exports = function( grunt ) {
 
 	"use strict";
 
-	grunt.registerTask( "testswarm", function( commit, configFile ) {
-		var jobName,
+	grunt.registerTask( "testswarm", function( commit, configFile, projectName, browserSets,
+			timeout, testMode ) {
+		var jobName, config, tests,
 			testswarm = require( "testswarm" ),
 			runs = {},
 			done = this.async(),
-			pull = /PR-(\d+)/.exec( commit ),
-			config = grunt.file.readJSON( configFile ).jquery,
-			tests = grunt.config([ this.name, "tests" ]);
+			pull = /PR-(\d+)/.exec( commit );
+
+		projectName = projectName || "jquery";
+		config = grunt.file.readJSON( configFile )[ projectName ];
+		browserSets = browserSets || config.browserSets;
+		if ( browserSets[ 0 ] === "[" ) {
+
+			// We got an array, parse it
+			browserSets = JSON.parse( browserSets );
+		}
+		timeout = timeout || 1000 * 60 * 15;
+		tests = grunt.config( [ this.name, "tests" ] );
 
 		if ( pull ) {
 			jobName = "Pull <a href='https://github.com/jquery/jquery/pull/" +
@@ -19,26 +29,29 @@ module.exports = function( grunt ) {
 				commit + "'>" + commit.substr( 0, 10 ) + "</a>";
 		}
 
-		tests.forEach(function( test ) {
-			runs[ test ] = config.testUrl + commit + "/test/index.html?module=" + test;
-		});
+		if ( testMode === "basic" ) {
+			runs.basic = config.testUrl + commit + "/test/index.html?module=basic";
+		} else {
+			tests.forEach( function( test ) {
+				runs[ test ] = config.testUrl + commit + "/test/index.html?module=" + test;
+			} );
+		}
 
 		testswarm.createClient( {
-			url: config.swarmUrl,
-			pollInterval: 10000,
-			timeout: 1000 * 60 * 30
+			url: config.swarmUrl
 		} )
 		.addReporter( testswarm.reporters.cli )
 		.auth( {
 			id: config.authUsername,
 			token: config.authToken
-		})
+		} )
 		.addjob(
 			{
 				name: jobName,
 				runs: runs,
 				runMax: config.runMax,
-				browserSets: "popular-no-old-ie"
+				browserSets: browserSets,
+				timeout: timeout
 			}, function( err, passed ) {
 				if ( err ) {
 					grunt.log.error( err );
@@ -46,5 +59,5 @@ module.exports = function( grunt ) {
 				done( passed );
 			}
 		);
-	});
+	} );
 };
